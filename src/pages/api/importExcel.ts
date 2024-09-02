@@ -1,31 +1,39 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import * as XLSX from 'xlsx';
 import fs from 'fs';
 import path from 'path';
+import csv from 'csv-parser';
+import sequelize from '../../../src/config/database';
 
-export default function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
-    const filePath = path.resolve('.', 'data.xlsx');
+    const filePath = path.resolve('.', 'data.csv');
 
     if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ error: 'Fichier Excel non trouvé' });
+      return res.status(404).json({ error: 'Fichier CSV non trouvé' });
     }
 
-    const file = fs.readFileSync(filePath);
-    const workbook = XLSX.read(file, { type: 'buffer' });
-    const sheetName = workbook.SheetNames[0];
-    const worksheet = workbook.Sheets[sheetName];
-    const data = XLSX.utils.sheet_to_json(worksheet);
+    const results: any[] = [];
 
-    console.log('Données brutes:', data);  // Affichez les données extraites du fichier Excel
-
-    if (!Array.isArray(data)) {
-      return res.status(500).json({ error: 'Les données renvoyées ne sont pas un tableau' });
-    }
-
-    res.status(200).json(data);
+    fs.createReadStream(filePath)
+      .pipe(csv())
+      .on('data', (row) => {
+        results.push(row);
+      })
+      .on('end', async () => {
+        for (const row of results) {
+          await sequelize.query(
+            'INSERT INTO data_import (date, utilisateurs_actifs, ventes, revenus, nouveaux_inscrits) VALUES (?, ?, ?, ?, ?)',
+            { replacements: [row.Date, row.Utilisateurs_Actifs, row.Ventes, row.Revenus, row.Nouveaux_Inscrits] }
+          );
+        }
+        res.status(200).json({ message: 'Importation réussie' });
+      })
+      .on('error', (error) => {
+        console.error('Erreur lors de la lecture du fichier CSV:', error);
+        res.status(500).json({ error: 'Erreur lors de la lecture du fichier CSV' });
+      });
   } catch (error) {
-    console.error('Erreur lors de la lecture du fichier Excel:', error);
-    res.status(500).json({ error: 'Erreur lors de la lecture du fichier Excel' });
+    console.error('Erreur lors de l\'importation des données:', error);
+    res.status(500).json({ error: 'Erreur lors de l\'importation des données' });
   }
 }
